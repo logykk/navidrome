@@ -1,0 +1,39 @@
+name: Publish Zenith container
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: zenith-image-publication
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      SOURCE_REPOSITORY: ${{ github.repository }}
+      SOURCE_SHA: ${{ github.sha }}
+      IMAGE_REFERENCE: ghcr.io/logykk/navidrome:zenith-a4cfffa246c2789ce9a52a8fd30574ae2778580c
+    steps:
+      - name: Fetch selected public source
+        run: |
+          git init .
+          git remote add origin "https://github.com/${SOURCE_REPOSITORY}.git"
+          git -c core.hooksPath=/dev/null fetch --depth=1 origin "${SOURCE_SHA}"
+          git -c core.hooksPath=/dev/null checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"
+      - name: Build without publication credentials
+        run: |
+          image="$IMAGE_REFERENCE"
+          docker build --label "org.opencontainers.image.source=https://github.com/${SOURCE_REPOSITORY}" --label "org.opencontainers.image.revision=${SOURCE_SHA}" --tag "$image" .
+      - name: Publish built image
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_ACTOR: ${{ github.actor }}
+        run: |
+          image="$IMAGE_REFERENCE"
+          config="$(mktemp -d)"
+          trap 'rm -rf "$config"' EXIT
+          printf '%s' "$GHCR_TOKEN" | docker --config "$config" login ghcr.io --username "$GHCR_ACTOR" --password-stdin
+          docker --config "$config" push "$image"

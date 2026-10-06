@@ -1,0 +1,70 @@
+name: navidrome
+services:
+  navidrome:
+    image: ghcr.io/logykk/navidrome:zenith-a4cfffa246c2789ce9a52a8fd30574ae2778580c
+    restart: unless-stopped
+    read_only: true
+    environment:
+      ND_ADDRESS: 0.0.0.0
+      ND_PORT: "4533"
+      ND_DATAFOLDER: /data
+      ND_MUSICFOLDER: /music
+      ND_CONFIGFILE: /data/navidrome.toml
+      ND_ENABLEEXTERNALSERVICES: "false"
+      ND_ENABLEINSIGHTSCOLLECTOR: "false"
+      ND_LOGLEVEL: info
+    expose:
+      - "4533"
+    volumes:
+      - navidrome_data:/data
+      - navidrome_music:/music
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:4533/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+volumes:
+  navidrome_data: {}
+  navidrome_music: {}
+x-zenith:
+  catalog:
+    name: Navidrome
+    description: Self-hosted web music collection server and streamer with a bundled web UI and local SQLite storage.
+    authors:
+      - Deluan Quintão
+    tags:
+      - music
+      - streaming
+      - media-server
+    source: https://github.com/navidrome/navidrome
+    license: GPL-3.0
+  expose:
+    - service: navidrome
+      port: 4533
+      web: true
+  storage:
+    data:
+      volume: navidrome_data
+      label: Application data and SQLite database
+    music:
+      volume: navidrome_music
+      label: Music library
+  env:
+    ND_BASEURL:
+      alias: ZENITH_PUBLIC_URL
+      services:
+        - navidrome
+    INITIAL_ADMIN_USERNAME:
+      input:
+        default: admin
+        label: Initial administrator username
+      services: []
+    INITIAL_ADMIN_PASSWORD:
+      generate: '[A-Za-z0-9]{32}'
+      input:
+        label: Initial administrator password
+        secret: true
+      services: []
