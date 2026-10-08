@@ -20,7 +20,7 @@ jobs:
       - name: Resolve public images and request Zenith review
         env:
           REPO_TOKEN: ${{ github.token }}
-          APP_ORIGIN: "http://app.zenith.localhost:3000"
+          APP_ORIGIN: "https://debate-annotation-entered-doug.trycloudflare.com"
           BUILT_SERVICE: ""
           BUILT_PENDING_IMAGE: "ghcr.io/logykk/navidrome:zenith-pending"
         run: |
