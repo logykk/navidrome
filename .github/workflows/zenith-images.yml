@@ -1,0 +1,126 @@
+name: Zenith images and review
+on:
+  push:
+    branches: ["master"]
+  schedule:
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: zenith-images
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Resolve public images and request Zenith review
+        env:
+          REPO_TOKEN: ${{ github.token }}
+          APP_ORIGIN: "http://app.zenith.localhost:3000"
+          BUILT_SERVICE: ""
+          BUILT_PENDING_IMAGE: "ghcr.io/logykk/navidrome:zenith-pending"
+        run: |
+          python -m pip install --disable-pip-version-check PyYAML==6.0.2
+          python - <<'PY'
+          import os, json, base64, re, urllib.request, urllib.parse
+          import yaml
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  raise ValueError('Redirect refused')
+          opener = urllib.request.build_opener(NoRedirect())
+          repo = os.environ['GITHUB_REPOSITORY']
+          origin = os.environ['APP_ORIGIN']
+          token = os.environ['REPO_TOKEN']
+          def fetch(url, headers=None, method='GET', body=None):
+              request = urllib.request.Request(url, data=None if body is None else json.dumps(body).encode(), headers=headers or {}, method=method)
+              with opener.open(request, timeout=30) as response:
+                  data = response.read(1048577)
+                  if len(data) > 1048576: raise ValueError('Response too large')
+                  return data, response.headers
+          def api(path, method='GET', body=None):
+              return json.loads(fetch('https://api.github.com/repos/'+repo+'/'+path, {'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json','Content-Type':'application/json'}, method, body)[0])
+          info = api('')
+          branch = info['default_branch']
+          if os.environ['GITHUB_REF'] != 'refs/heads/'+branch: raise ValueError('Default branch required')
+          head = api('commits/'+urllib.parse.quote(branch, safe=''))['sha']
+          if head != os.environ['GITHUB_SHA']:
+              print('Stale image run: default branch advanced. No changes or review requested.')
+              raise SystemExit(0)
+          file = api('contents/zenith-compose.yml?ref='+head)
+          if file['type'] != 'file' or file['size'] > 131072: raise ValueError('Invalid compose')
+          text = base64.b64decode(file['content']).decode()
+          compose = yaml.safe_load(text)
+          root = yaml.compose(text)
+          def mapping(node):
+              if not isinstance(node,yaml.MappingNode) or node.flow_style: raise ValueError('Block mappings required for safe image patch')
+              result = {}
+              for key,value in node.value:
+                  if not isinstance(key,yaml.ScalarNode) or key.value in result: raise ValueError('Duplicate or unsupported key')
+                  result[key.value] = value
+              return result
+          for event in yaml.parse(text):
+              if getattr(event,'anchor',None) or isinstance(event,yaml.AliasEvent): raise ValueError('Anchors/aliases cannot be image-patched safely')
+          services_node = mapping(mapping(root)['services'])
+          patches = []
+          def scalar_patch(node,value):
+              if not isinstance(node,yaml.ScalarNode) or node.style not in (None,chr(34),chr(39)): raise ValueError('Plain or quoted image scalars required')
+              patches.append((node.start_mark.index,node.end_mark.index,json.dumps(value)))
+          changed = False
+          for name, service in compose['services'].items():
+              current = service['image']
+              tracking = service.get('x-zenith-image',{})
+              if not isinstance(tracking,dict): raise ValueError('Invalid image tracking')
+              image = tracking.get('source',current) if tracking.get('last_pin') == current else current
+              if name == os.environ['BUILT_SERVICE'] and os.environ.get('BUILT_IMAGE') and (current == os.environ['BUILT_PENDING_IMAGE'] or (tracking.get('last_pin') == current and tracking.get('source','').split('@')[0].split(':')[0] == os.environ['BUILT_PENDING_IMAGE'].split(':')[0])):
+                  image = os.environ['BUILT_IMAGE']
+              base = image.split('@')[0]
+              tag = 'latest'
+              if ':' in base: base, tag = base.rsplit(':',1)
+              host = 'registry-1.docker.io'
+              if base.startswith('ghcr.io/'): host, base = 'ghcr.io', base[8:]
+              elif base.startswith('docker.io/'): base = base[10:]
+              elif '.' in base.split('/')[0] or ':' in base.split('/')[0]: raise ValueError('Unsupported registry')
+              if host == 'registry-1.docker.io' and '/' not in base: base = 'library/'+base
+              if not re.fullmatch(r'[a-z0-9][a-z0-9._/-]*', base) or '..' in base: raise ValueError('Invalid image path')
+              if '@' in image: tag = image.split('@',1)[1]
+              if not re.fullmatch(r'[A-Za-z0-9_.:-]+',tag): raise ValueError('Invalid image tag')
+              auth = 'https://ghcr.io/token?service=ghcr.io' if host=='ghcr.io' else 'https://auth.docker.io/token?service=registry.docker.io'
+              public_token = json.loads(fetch(auth+'&scope='+urllib.parse.quote('repository:'+base+':pull',safe=''))[0])['token']
+              _, headers = fetch('https://'+host+'/v2/'+base+'/manifests/'+tag, {'Authorization':'Bearer '+public_token,'Accept':'application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json'}, 'HEAD')
+              digest = headers.get('Docker-Content-Digest','')
+              if not re.fullmatch(r'sha256:[a-f0-9]{64}',digest): raise ValueError('Invalid public image digest')
+              pinned = ('ghcr.io/' if host=='ghcr.io' else 'docker.io/')+base+'@'+digest
+              fields = mapping(services_node[name])
+              if current != pinned:
+                  scalar_patch(fields['image'],pinned)
+                  changed = True
+              if tracking.get('source') != image or tracking.get('last_pin') != pinned:
+                  if 'x-zenith-image' in fields:
+                      tracked_fields = mapping(fields['x-zenith-image'])
+                      if set(tracked_fields) != {'source','last_pin'}: raise ValueError('Unsupported tracking fields')
+                      scalar_patch(tracked_fields['source'],image)
+                      scalar_patch(tracked_fields['last_pin'],pinned)
+                  else:
+                      node = fields['image']
+                      key_indent = ' '*next(key.start_mark.column for key,value in services_node[name].value if key.value=='image')
+                      line_end = text.find('\n',node.end_mark.index)
+                      if line_end<0: line_end=len(text)
+                      insertion = '\n'+key_indent+'x-zenith-image:\n'+key_indent+'  source: '+json.dumps(image)+'\n'+key_indent+'  last_pin: '+json.dumps(pinned)
+                      patches.append((line_end,line_end,insertion))
+                  changed = True
+          if changed:
+              for start,end,value in sorted(patches,reverse=True): text=text[:start]+value+text[end:]
+              updated = yaml.safe_load(text)
+              if set(updated['services']) != set(compose['services']): raise ValueError('Unexpected image patch result')
+              tree = api('git/trees', 'POST', {'base_tree':api('git/commits/'+head)['tree']['sha'],'tree':[{'path':'zenith-compose.yml','mode':'100644','type':'blob','content':text}]})
+              commit = api('git/commits', 'POST', {'message':'Update Zenith public image digests','tree':tree['sha'],'parents':[head]})
+              api('git/refs/heads/'+urllib.parse.quote(branch,safe=''), 'PATCH', {'sha':commit['sha'],'force':False})
+              head = commit['sha']
+          request_url = os.environ['ACTIONS_ID_TOKEN_REQUEST_URL']+'&audience='+urllib.parse.quote(origin,safe='')
+          oidc = json.loads(fetch(request_url,{'Authorization':'Bearer '+os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN']})[0])['value']
+          fetch(origin+'/api/v1/developer/onboarding/update',{'Authorization':'Bearer '+oidc,'Content-Type':'application/json'},'POST',{'commitSha':head})
+          PY

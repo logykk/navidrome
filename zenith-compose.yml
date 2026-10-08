@@ -1,0 +1,62 @@
+services:
+  app:
+    image: deluan/navidrome:latest
+    restart: unless-stopped
+    environment:
+      ND_MUSICFOLDER: /music
+      ND_DATAFOLDER: /data
+      ND_CONFIGFILE: /data/navidrome.toml
+      ND_PORT: "4533"
+    volumes:
+      - data:/data
+      - music:/music
+    ports:
+      - "4533:4533"
+volumes:
+  data: {}
+  music: {}
+x-zenith:
+  catalog:
+    name: Navidrome
+    description: Open source web-based music collection server and streamer.
+    authors:
+      - Navidrome contributors
+    tags:
+      - music
+      - streaming
+      - media
+    source: https://github.com/logykk/navidrome
+    license: GPL-3.0
+  expose:
+    - service: app
+      port: 4533
+      web: true
+  storage:
+    data:
+      volume: data
+      label: Application data
+      description: Navidrome database, cache, configuration, and application state.
+      public: false
+    music:
+      volume: music
+      label: Music library
+      description: Music collection scanned and streamed by Navidrome.
+      public: true
+  env:
+    ND_SCANSCHEDULE:
+      input:
+        label: Scan schedule
+        description: Cron expression controlling automatic music library scans.
+        default: "@every 1m"
+        required: false
+      services:
+        - app
+    ND_LOGLEVEL:
+      input:
+        label: Log level
+        description: Navidrome logging level.
+        default: "info"
+        required: false
+        validator: "^(trace|debug|info|warn|error)$"
+      services:
+        - app
