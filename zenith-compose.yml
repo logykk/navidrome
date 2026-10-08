@@ -1,6 +1,9 @@
 services:
   app:
-    image: deluan/navidrome:latest
+    image: "docker.io/deluan/navidrome@sha256:38dc2727bfcfd5ede290f8ada114fc90368146f265ae4701ddddbcbe2a44ee52"
+    x-zenith-image:
+      source: "deluan/navidrome:latest"
+      last_pin: "docker.io/deluan/navidrome@sha256:38dc2727bfcfd5ede290f8ada114fc90368146f265ae4701ddddbcbe2a44ee52"
     restart: unless-stopped
     environment:
       ND_MUSICFOLDER: /music
