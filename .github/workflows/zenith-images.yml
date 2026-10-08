@@ -42,7 +42,7 @@ jobs:
                   if len(data) > 1048576: raise ValueError('Response too large')
                   return data, response.headers
           def api(path, method='GET', body=None):
-              return json.loads(fetch('https://api.github.com/repos/'+repo+'/'+path, {'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json','Content-Type':'application/json'}, method, body)[0])
+              return json.loads(fetch('https://api.github.com/repos/'+repo+('/'+path if path else ''), {'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json','Content-Type':'application/json'}, method, body)[0])
           info = api('')
           branch = info['default_branch']
           if os.environ['GITHUB_REF'] != 'refs/heads/'+branch: raise ValueError('Default branch required')
