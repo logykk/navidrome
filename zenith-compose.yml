@@ -63,3 +63,4 @@ x-zenith:
         validator: "^(trace|debug|info|warn|error)$"
       services:
         - app
+
